@@ -1,0 +1,45 @@
+## EWS
+.env
+*.probes.dat
+*.vts
+*.vti
+*.vtr
+*.scl
+*.wnd
+*.ewnd
+ggeom.*
+landuse.asc
+albeq.dat
+albedo.txt
+conductivity.txt
+density.txt
+emissivity.txt
+roughness.txt
+moisture.txt
+DispNrGramm.txt
+PercentGramm.txt
+Max_Proc.txt
+LogFile_*.txt
+*_steady_state.txt
+
+
+Bin
+
+## Gis
+Askervein/01_simulation/**/GRAMM.geb
+Askervein/01_simulation/**/*.dat
+Askervein/01_simulation/**/geom.in
+Askervein/01_simulation/**/*.bat
+
+Askervein/**/locations.geojson
+Askervein/**/*.asc*
+Askervein/**/*.prj
+Askervein/**/*.aux.xml
+Askervein/**/*.hgt*
+Askervein/**/*.tif*
+Askervein/**/*.vrt
+
+# Python
+__pycache__
+*.pyc
+.ipynb_checkpoints

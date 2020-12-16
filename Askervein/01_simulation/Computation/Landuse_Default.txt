@@ -1,0 +1,2 @@
+Code, Albedo [-], Emissivity [-], Soil moisture [-], Roughness length [m], Heat conductivity [W/(mK)], Thermal conductivity [m2/s]
+0,0.1,0.9,0.05,0.3,2,0.0000001,
