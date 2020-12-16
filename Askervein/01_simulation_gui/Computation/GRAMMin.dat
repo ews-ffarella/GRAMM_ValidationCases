@@ -1,0 +1,6 @@
+Version 20.09
+y        
+0.023    
+1,80     ! Number of nr_smooth_cells
+yes      ! write steady-state-file
+0        ! GRAMM Sunrise option not activated
