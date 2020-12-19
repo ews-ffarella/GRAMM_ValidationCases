@@ -21,9 +21,15 @@ PercentGramm.txt
 Max_Proc.txt
 LogFile_*.txt
 *_steady_state.txt
+TPI_*.txt
+Topography.txt
+AllSituations*.met
+GRAMM*.exe
+GRAMM.dat
 
-
-Bin
+mesh_new
+mesh_old
+Bin/*.exe
 
 ## Gis
 Askervein/01_simulation/**/GRAMM.geb
@@ -39,7 +45,24 @@ Askervein/**/*.hgt*
 Askervein/**/*.tif*
 Askervein/**/*.vrt
 
+Alaiz/**/locations.geojson
+Alaiz/**/*.asc*
+Alaiz/**/*.prj
+Alaiz/**/*.aux.xml
+Alaiz/**/*.hgt*
+Alaiz/**/*.tif*
+Alaiz/**/*.vrt
+
+Predigao/**/locations.geojson
+Predigao/**/*.asc*
+Predigao/**/*.prj
+Predigao/**/*.aux.xml
+Predigao/**/*.hgt*
+Predigao/**/*.tif*
+Predigao/**/*.vrt
+
 # Python
+.pytest*
 __pycache__
 *.pyc
 .ipynb_checkpoints
