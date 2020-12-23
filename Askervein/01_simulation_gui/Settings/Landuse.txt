@@ -1,1 +1,0 @@
-S:\EWSProjects\GralDispersionModel\ValidationCases\Askervein\00_input_data\corine.landcover.asc.txt

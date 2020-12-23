@@ -1,9 +1,0 @@
-10,1,10,    !Are dispersion situations classified =0 or not =1
-Wind direction sector,Wind speed class,stability class, frequency
-21.0,3.0,4,1.00
-21.0,3.0,5,1.00
-21.0,3.0,3,1.00
-21.0,3.0,6,1.00
-21.0,3.0,2,1.00
-21.0,3.0,7,1.00
-21.0,3.0,1,1.00

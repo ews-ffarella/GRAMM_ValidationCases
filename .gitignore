@@ -1,3 +1,7 @@
+Alaiz
+Predigao
+**/__ignore__
+
 ## EWS
 .env
 *.probes.dat
@@ -32,10 +36,10 @@ mesh_old
 Bin/*.exe
 
 ## Gis
-Askervein/01_simulation/**/GRAMM.geb
-Askervein/01_simulation/**/*.dat
-Askervein/01_simulation/**/geom.in
-Askervein/01_simulation/**/*.bat
+Askervein/01_simulation*/**/GRAMM.geb
+Askervein/01_simulation*/**/*.dat
+Askervein/01_simulation*/**/geom.in
+Askervein/01_simulation*/**/*.bat
 
 Askervein/**/locations.geojson
 Askervein/**/*.asc*

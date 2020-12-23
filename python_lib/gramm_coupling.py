@@ -85,7 +85,7 @@ def read_gramm_grid(filename):
     arr[:, 2] = np.concatenate([arr.flatten() for arr in z_pts_list])
     points.SetData(numpy_to_vtk(arr, deep=True))
     sgrid.SetPoints(points)
-    return sgrid
+    return sgrid, (xs, ys, ah)
         
 
 
@@ -217,68 +217,31 @@ class GrammMesh:
     def read_mesh(self):
         fname = self.path / "ggeom.asc"
         assert fname.is_file()
-        with fname.open("rb") as fin:
-            _ = fin.read(6)  # header
-            nx = readint(fin)
-            assert nx == self.nx
-            ny = readint(fin)
-            assert ny == self.ny
-            nz = readint(fin)
-            assert nz == self.nz
-            slab_shape = (nx, ny)
-            slab_size = nx * ny
-            # Terrain heights (cell centers)
-            ah = np.fromfile(fin, dtype="f", count=slab_size, sep="")
-            
-
-            zl = list()
-            for _ in range(nz):
-                z = np.fromfile(fin, dtype="f", count=slab_size, sep="")
-                z = np.transpose(z.reshape(slab_shape, order="F"), [1, 0])[::-1]
-                zl.append(z)
-
-            rest = np.fromfile(fin, dtype="f", sep="")
-
-            # Points heights
-            pts_slab_size = (nx + 1) * (ny + 1)
-            pts_slab_shape = (nx + 1, ny + 1)
-            z_pts_list = list()
-            for zi in range(nz + 1):
-                s = slice(len(rest) - pts_slab_size * (zi + 1), len(rest) - pts_slab_size * zi)
-                z = np.transpose(rest[s].reshape(pts_slab_shape, order="F"), [1, 0])
-                z_pts_list.append(z)
-            z_pts_list = z_pts_list[::-1]
-
-        terrain_data = vtk.vtkImageData()
-        terrain_data.SetDimensions([self.nx_points, self.ny_points, 1])
-        terrain_data.SetOrigin([self.xmin, self.ymin, 0])
-        terrain_data.SetSpacing([self.dx, self.dy, 0])
-
-        dims = [self.nx_points, self.ny_points, self.nz_points]
-        sgrid = vtk.vtkStructuredGrid()
-
-        sgrid.SetDimensions(dims)
-        xs = self.xmin + np.linspace(0, self.xmax - self.xmin, self.nx + 1)
-        ys = self.ymin + np.linspace(0, self.ymax - self.ymin, self.ny + 1)
-        points = vtk.vtkPoints()
-        XX, YY = np.meshgrid(xs, ys)
-        xx = XX.flatten()
-        yy = YY.flatten()
-        arr = np.empty((self.number_of_points, 3))
-        arr[:, 0] = np.concatenate([xx for arr in z_pts_list])
-        arr[:, 1] = np.concatenate([yy for arr in z_pts_list])
-        arr[:, 2] = np.concatenate([arr.flatten() for arr in z_pts_list])
-        points.SetData(numpy_to_vtk(arr, deep=True))
-        sgrid.SetPoints(points)
-
-        elevation = numpy_to_vtk(z_pts_list[0].flatten(), deep=True)
-        elevation.SetName("Elevation")
+        sgrid, (xs, ys, ah) = read_gramm_grid(fname)
+        self.xs = xs
+        self.ys = ys
+        nxp, nyp, nzp = sgrid.GetDimensions()
+        assert (nxp-1) == self.nx
+        assert (nyp-1) == self.ny
+        assert (nzp-1) == self.nz
         
-        ah = np.transpose(ah.reshape(slab_shape, order="F"), [1, 0]).T        
+        extents = sgrid.GetExtent()
+        subgrid = vtk.vtkExtractGrid()
+        subgrid.SetVOI((extents[0], extents[1], extents[2], extents[3], extents[4], 0))
+        subgrid.SetIncludeBoundary(True)
+        subgrid.SetInputData(sgrid)
+        subgrid.Update()
+        terrain_data = vtk.vtkStructuredGrid()
+        terrain_data.ShallowCopy(subgrid.GetOutput())
+        subgrid = None
+        del subgrid        
+
+        ah = np.transpose(ah.reshape((nxp-1, nyp-1), order="F"), [1, 0])     
         ah = numpy_to_vtk(ah.flatten(), deep=True)
         ah.SetName("Elevation")
-        terrain_data.GetPointData().SetScalars(elevation)
         terrain_data.GetCellData().SetScalars(ah)
+        
+        # terrain_data.GetPointData().SetScalars(elevation)
         
         #src/Gral/GRALIO/Landuse.cs
         '''
@@ -302,15 +265,23 @@ class GrammMesh:
         # RHOB ALAMBDA Z0 FW EPSG ALBEDO
         if not self.path.joinpath('Landuse.asc').is_file():
             return self.vtk_grid 
-            
-        arr = np.array(self.path.joinpath('Landuse.asc').read_text().strip().split(' ')).astype('float')
-        nt = self.nx * self.ny 
-        for ai, name in enumerate('Density Conductivity RoughnessLength MoistureContent Emissivity Albedo'.split(' ')):
-            avtk = arr[ai*nt:(ai+1)*nt]
-            avtk = np.transpose(avtk.reshape((nx, ny), order="F"), [1, 0]).T          
-            avtk = numpy_to_vtk(avtk.flatten(), deep=True)
-            avtk.SetName(name)
-            terrain_data.GetCellData().AddArray(avtk)    
+        
+        try:
+            arr = self.path.joinpath('Landuse.asc').read_text().strip().split("\n")
+            arr = [np.array(_.split(' ')).astype('float') for _ in arr]
+           
+            nt = self.nx * self.ny 
+            i = 0
+            for ai, name in enumerate('Density Conductivity RoughnessLength MoistureContent Emissivity Albedo'.split(' ')):
+                avtk = arr[i]
+                i += 1  
+                avtk = np.transpose(avtk.reshape((nxp-1, nyp-1), order="F"), [1, 0])       
+                avtk = numpy_to_vtk(avtk.flatten(), deep=True)
+                avtk.SetName(name)
+                terrain_data.GetCellData().AddArray(avtk)    
+        except Exception as e:
+            print(e)
+            pass
 
         return self.vtk_grid 
 
@@ -338,10 +309,10 @@ class GrammMesh:
 
     def write_terrain_data(self, fname=None, grid=None):
         if fname is None:
-            fname = self.path / 'terrain_data.vti'
+            fname = self.path / 'terrain_data.vts'
         if grid is None:
             grid = self.terrain_data
-        writer = vtk.vtkXMLImageDataWriter()
+        writer = vtk.vtkXMLStructuredGridWriter()
         writer.SetFileName(str(fname))
         writer.SetInputData(grid)
         res = writer.Write()
@@ -358,10 +329,10 @@ class GrammMesh:
         extent = self.extent
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
 
-        arr = vtk_to_numpy(arr).reshape(self.ny, self.nx, order = 'F')[::-1, :]
-        im = ax.imshow(
-            arr,
-            extent=extent, cmap='terrain', zorder=20
+        arr = vtk_to_numpy(arr).reshape(self.nx, self.ny, order = 'F')
+        im = ax.pcolormesh(
+            self.xs, self.ys, arr.T,
+            cmap='terrain', zorder=20
         )
         ax.set(xlim=extent[:2], ylim=extent[2:], aspect='equal');
 
@@ -394,9 +365,9 @@ class GrammMesh:
         bounds = self.bounds    
         extent = self.extent
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
-        im = ax.imshow(
-            arr,
-            extent=extent, cmap=cmap, zorder=20
+        im = ax.pcolormesh(
+            self.xs, self.ys, arr,
+            cmap=cmap, zorder=20
         )
         ax.set(xlim=extent[:2], ylim=extent[2:], aspect='equal');
 
