@@ -183,7 +183,7 @@ def data_window(src_data, src_transform, window_bounds):
     return data, transform, extent, slice_x, slice_y
 
 
-def create_bbox_interpolator(raster_filename, bbox, band=1, resolution=None):
+def create_bbox_interpolator(raster_filename, bbox, band=1, resolution=None, cell_centers=True):
     if not isinstance(raster_filename, (list, tuple)):
         with rio.open(raster_filename) as src:
             if resolution is None:
@@ -219,9 +219,30 @@ def create_bbox_interpolator(raster_filename, bbox, band=1, resolution=None):
             src_data, src_transform, src_bounds
         )
 
+        
     height, width = data.shape
-    rxs = (np.linspace(*extent[:2], width + 1) + 0.5 * transform[0])[:-1]
-    rys = (np.linspace(*extent[2:], height + 1) + 0.5 * -transform[4])[:-1]
+    
+    
+    rxs = np.linspace(*extent[:2], width + 1)[:-1]
+    rys = np.linspace(*extent[2:], height + 1)[:-1]
+    
+    if cell_centers:
+        dx, dy = transform[0], -transform[4]
+        rxs = rxs + dx * 0.5
+        rys = rys + dy * 0.5
+    
+    
+    if 0:
+        import affine
+        shifted_transform = transform * affine.Affine.translation(0.5, 0.5)
+        def rc2xy_cc(r, c):
+            return (c, r) * shifted_transform
+        (ras_cc_xmin, ras_cc_ymin) = rc2xy_cc(height - 1, 0)
+        (ras_cc_xmax, ras_cc_ymax) = rc2xy_cc(0, width - 1)
+        print(ras_cc_xmin, ras_cc_xmax)
+        print(rxs[0], rxs[-1])
+        print(ras_cc_ymin, ras_cc_ymax)   
+        print(rys[0], rys[-1])
 
     interpolator = RegularGridInterpolator(
         (rxs, rys), data[::-1].T, bounds_error=False, fill_value=np.nan
@@ -761,43 +782,7 @@ class GrammMesher:
 {str(self.ymin):20s}!South border of GRAMM model domain [m]
 {str(self.ymax):20s}!North border of GRAMM model domain [m]
         """.strip()
-
-    def write_landuse(self, filename):
-        assert self.ccs_df.index.size == self.nx * self.ny
-        RHOB = self.ccs_df["RHOB"].values
-        ALAMBDA = self.ccs_df["ALAMBDA"].values
-        Z0 = self.ccs_df["Z0"].values
-        FW = self.ccs_df["FW"].values
-        EPSG = self.ccs_df["EPSG"].values
-        ALBEDO = self.ccs_df["ALBEDO"].values
-        with open(str(filename), "w") as f:
-            f.write(" ".join(RHOB.astype(np.int).astype(str).flatten(order="F")) + "\n")
-            f.write(
-                " ".join(ALAMBDA.round(3).astype(str).flatten(order="F")).replace(
-                    ".0 ", " "
-                )
-                + "\n"
-            )
-            f.write(
-                " ".join(Z0.round(4).astype(str).flatten(order="F")).replace(".0 ", " ")
-                + "\n"
-            )
-            f.write(
-                " ".join(FW.round(4).astype(str).flatten(order="F")).replace(".0 ", " ")
-                + "\n"
-            )
-            f.write(
-                " ".join(EPSG.round(4).astype(str).flatten(order="F")).replace(
-                    ".0 ", " "
-                )
-                + "\n"
-            )
-            f.write(
-                " ".join(ALBEDO.round(3).astype(str).flatten(order="F")).replace(
-                    ".0 ", " "
-                )
-                + "\n"
-            )
+                       
 
         return filename
 
@@ -816,8 +801,7 @@ class GrammMesher:
         mesh_bbox,
         dz0,
         ddz,
-        n_constant_cells=1,
-        ah_min=None,
+        n_constant_cells=1
     ):
 
         xmin = mesh_bbox.left
@@ -831,12 +815,12 @@ class GrammMesher:
         # Coordinates of points
         X = xs - xmin
         Y = ys - ymin
-
-        AH = np.transpose(ccs_df["Z"].values.reshape(ny, nx, order="C"), [1, 0])
-        # CLC = np.transpose(ccs_df['CLC_AreaWeighted'].values.reshape(ny, nx, order = 'C'), [1, 0])
+        
         SurfaceEdge = np.transpose(
             pts_df["Z"].values.reshape(ny + 1, nx + 1, order="C"), [1, 0]
         )
+        ah_min = SurfaceEdge.min()
+        
         dh = SurfaceEdge.max() - SurfaceEdge.min()
         log.info(3.0 * dh)
 
@@ -846,15 +830,80 @@ class GrammMesher:
         dz = np.append(0, np.cumsum(dz))
 
         # Points Locations
-        ah_min_self = AH.min()
-        log.info(f"AH_MIN: {ah_min_self}")
-        if ah_min is None:
-            ah_min = ah_min_self
-        else:
-            log.info(f"Using AH_MIN: {ah_min} (old {ah_min_self})")
-
+        
         Z = ah_min + dz
-        zmax = Z.max()
+        zmax = Z.max()        
+        VertStretch = (zmax - SurfaceEdge) / dz.max()
+        
+        AHE = (
+            SurfaceEdge[:, :, np.newaxis]
+            + dz[np.newaxis, np.newaxis, :] * VertStretch[:, :, np.newaxis]
+        )        
+        
+        terrain_grid = vtk.vtkStructuredGrid()
+        terrain_grid.SetDimensions([nx+1, ny+1, 1])
+        points = vtk.vtkPoints()
+        XX, YY = np.meshgrid(xs, ys)
+        xx = XX.flatten()
+        yy = YY.flatten()
+        arr = np.empty(((nx+1)*(ny+1), 3))
+        arr[:, 0] = xx
+        arr[:, 1] = yy
+        arr[:, 2] = AHE[:, :, 0].flatten(order="F")
+        points.SetData(numpy_to_vtk(arr, deep=True))
+        terrain_grid.SetPoints(points)        
+        ccs_extractor = vtk.vtkCellCenters()
+        ccs_extractor.SetInputData(terrain_grid)
+        ccs_extractor.Update()
+        cc = vtk_to_numpy(ccs_extractor.GetOutput().GetPoints().GetData())
+        ccs_extractor = None
+        del ccs_extractor
+        AH_old = np.transpose(ccs_df["Z"].values.reshape(ny, nx, order="C"), [1, 0])  
+        AH = cc[:, 2].reshape(nx,ny, order='F')
+        
+        assert np.abs(AH_old - AH).round(1).max() <= 1e6
+        
+        for col_name in ccs_df.columns:
+            if col_name in ['X', 'Y']:
+                continue                
+            vtk_arr = numpy_to_vtk(ccs_df[col_name].values, deep=True)
+            vtk_arr.SetName(col_name)
+            terrain_grid.GetCellData().AddArray(vtk_arr)            
+        elevation = numpy_to_vtk(AHE[:, :, 0].flatten(order="F"), deep=True)
+        elevation.SetName("Z")
+        terrain_grid.GetPointData().AddArray(elevation)            
+        
+        grid = vtk.vtkStructuredGrid()
+        grid.SetDimensions([nx+1, ny+1, nz+1])
+        points = vtk.vtkPoints()
+        XX, YY = np.meshgrid(xs, ys)
+        xx = XX.flatten()
+        yy = YY.flatten()
+        arr = np.empty(((nx+1)*(ny+1)*(nz+1), 3))
+        arr[:, 0] = np.concatenate([xx for arr in range(nz+1)])
+        arr[:, 1] = np.concatenate([yy for arr in range(nz+1)])
+        arr[:, 2] = np.concatenate([AHE[:, :, _].flatten(order="F") for _ in range(nz+1)])
+        points.SetData(numpy_to_vtk(arr, deep=True))
+        grid.SetPoints(points)
+        ccs_extractor = vtk.vtkCellCenters()
+        ccs_extractor.SetInputData(grid)
+        ccs_extractor.Update()
+        cc = vtk_to_numpy(ccs_extractor.GetOutput().GetPoints().GetData())
+        ccs_extractor = None
+        del ccs_extractor
+        ZSP = cc[:, 2].reshape(nx,ny,nz, order='F')        
+        
+        if 1:
+            VertStretch = (zmax - AH) / dz.max()
+            ZSP_old = (
+                AH[:, :, np.newaxis]
+                + dz[np.newaxis, np.newaxis, :] * VertStretch[:, :, np.newaxis]
+            )
+            ZSP_old = (ZSP_old[:, :, :-1] + ZSP_old[:, :, 1:]) / 2.0
+            assert ZSP.shape == ZSP_old.shape                  
+            assert np.abs(ZSP_old - ZSP).round(1).max() <= 1e6
+        
+        
         # DDX, DDY = horizontal grid size in x and y directions
         DDX = np.copy(dist_x[1:])
         DDY = np.copy(dist_y[1:])
@@ -863,19 +912,7 @@ class GrammMesher:
         ZAY = np.copy(dist_y[1:])
         ZAX[-1] = 0
         ZAY[-1] = 0
-
-        VertStretch = (zmax - AH) / dz.max()
-        ZSP = (
-            AH[:, :, np.newaxis]
-            + dz[np.newaxis, np.newaxis, :] * VertStretch[:, :, np.newaxis]
-        )
-        ZSP = (ZSP[:, :, :-1] + ZSP[:, :, 1:]) / 2.0
-
-        VertStretch = (zmax - SurfaceEdge) / dz.max()
-        AHE = (
-            SurfaceEdge[:, :, np.newaxis]
-            + dz[np.newaxis, np.newaxis, :] * VertStretch[:, :, np.newaxis]
-        )
+        
 
         # AREAS of the surfaces along x- and y- directions
         AREAX = (
@@ -951,8 +988,10 @@ class GrammMesher:
         meshDef.ZAX = ZAX
         meshDef.ZAY = ZAY
         meshDef.AHE = AHE
+        meshDef.grid = grid
+        meshDef.terrain_grid = terrain_grid        
         return meshDef
-
+        
     @classmethod
     def read_mesh(cls, filename):
         self = cls()
@@ -986,6 +1025,57 @@ class GrammMesher:
         assert rest.size == 0
         self.xmax = self.xmin + self.DDX.sum()
         self.ymax = self.ymin + self.DDY.sum()
+        
+        grid = vtk.vtkStructuredGrid()
+        grid.SetDimensions([self.nx + 1, self.ny + 1, self.nz + 1])
+        xs = self.xmin + self.X
+        ys = self.ymin + self.Y
+        points = vtk.vtkPoints()
+        XX, YY = np.meshgrid(xs, ys)
+        xx = XX.flatten()
+        yy = YY.flatten()
+        arr = np.empty(((nx + 1) * (ny + 1) * (nz + 1), 3))
+        arr[:, 0] = np.concatenate([xx for arr in range(nz+1)])
+        arr[:, 1] = np.concatenate([yy for arr in range(nz+1)])
+        arr[:, 2] = self.AHE #np.concatenate([self.AHE.reshape((nz+1, ny+1, nx+1), order='F')[zi, :, :].flatten() for zi in range(nz+1)])
+        points.SetData(numpy_to_vtk(arr, deep=True))
+        grid.SetPoints(points)        
+        self.grid = grid     
+        
+        terrain_grid = vtk.vtkStructuredGrid()
+        terrain_grid.SetDimensions([self.nx + 1, self.ny + 1, 1])
+        points = vtk.vtkPoints()
+        arr = np.empty(((nx + 1) * (ny + 1), 3))
+        arr[:, 0] = xx
+        arr[:, 1] = yy
+        arr[:, 2] = self.AHE[:(nx + 1) * (ny + 1)]
+        points.SetData(numpy_to_vtk(arr, deep=True))
+        terrain_grid.SetPoints(points)  
+        elevation = numpy_to_vtk(arr[:, 2], deep=True)   
+        elevation.SetName("Elevation")
+        terrain_grid.GetPointData().AddArray(elevation)
+        self.terrain_grid = terrain_grid           
+        return self
+
+    def read_landuse(self, filename):    
+        n_cells = self.nx * self.ny
+        keys = "RHOB ALAMBDA Z0 FW EPSG ALBEDO CLC".split(" ")
+        array_dict = {}
+        with open(str(filename), "r") as f:
+            for array_name in keys:
+                try:                
+                    arr = np.array(f.readline().strip().split(" ")).astype('float')
+                    assert arr.size == n_cells
+                    array_dict[array_name] = arr#.reshape(self.ny, self.nx, order="C").ravel()
+                except:
+                    pass
+
+        for array_name, arr in array_dict.items():
+            if array_name == "CLC":
+                arr = arr.astype("int")
+            vtk_arr = numpy_to_vtk(arr, deep=True)   
+            vtk_arr.SetName(array_name)
+            self.terrain_grid.GetCellData().AddArray(vtk_arr)
         return self
 
     def write_ggeom_binary(self, filename, angle=0):
@@ -1120,3 +1210,65 @@ class GrammMesher:
                 )
             )
         return filename
+    
+
+    def write_landuse(self, filename):
+        nx = self.nx
+        ny = self.ny
+        assert self.ccs_df.index.size == nx * ny
+        RHOB = np.transpose(
+            self.ccs_df["RHOB"].values.reshape(ny, nx, order="C"), [1, 0]
+        ).astype('int')
+        ALAMBDA = np.transpose(
+            self.ccs_df["ALAMBDA"].values.reshape(ny, nx, order="C"), [1, 0]
+        )
+        Z0 = np.transpose(
+            self.ccs_df["Z0"].values.reshape(ny, nx, order="C"), [1, 0]
+        )
+        FW = np.transpose(
+            self.ccs_df["FW"].values.reshape(ny, nx, order="C"), [1, 0]
+        )
+        EPSG = np.transpose(
+            self.ccs_df["EPSG"].values.reshape(ny, nx, order="C"), [1, 0]
+        )
+        ALBEDO = np.transpose(
+            self.ccs_df["ALBEDO"].values.reshape(ny, nx, order="C"), [1, 0]
+        )
+        CLC_AreaWeighted = np.transpose(
+            self.ccs_df["CLC_AreaWeighted"].values.reshape(ny, nx, order="C"), [1, 0]
+        ).astype('int')
+
+        with open(str(filename), "w") as f:
+            f.write(" ".join(RHOB.astype(str).flatten(order="F")) + "\n")
+            f.write(
+                " ".join(ALAMBDA.round(3).astype(str).flatten(order="F")).replace(
+                    ".0 ", " "
+                )
+                + "\n"
+            )
+            f.write(
+                " ".join(Z0.round(4).astype(str).flatten(order="F")).replace(".0 ", " ")
+                + "\n"
+            )
+            f.write(
+                " ".join(FW.round(4).astype(str).flatten(order="F")).replace(".0 ", " ")
+                + "\n"
+            )
+            f.write(
+                " ".join(EPSG.round(4).astype(str).flatten(order="F")).replace(
+                    ".0 ", " "
+                )
+                + "\n"
+            )
+            f.write(
+                " ".join(ALBEDO.round(3).astype(str).flatten(order="F")).replace(
+                    ".0 ", " "
+                )
+                + "\n"
+            )
+            f.write(
+                " ".join(CLC_AreaWeighted.astype(str).flatten(order="F")).replace(
+                    ".0 ", " "
+                )
+                + "\n"
+            )
